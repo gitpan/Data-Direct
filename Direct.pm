@@ -4,7 +4,7 @@ use strict qw(vars subs);
 use vars qw($VERSION @EXPORT @ISA $opt_u $opt_p $table $opt_w $opt_a
 	$gen_unique);
 
-$VERSION = 0.04;
+$VERSION = 0.05;
 
 require Exporter;
 @EXPORT = qw(edit);
@@ -356,7 +356,7 @@ sub spawn {
     if ($s ne $ss) {
         @$rs = ();
         open(I, $fn) || die "Can't open $fn for read: $!";
-        while (!eof(I)) {
+        while (!CORE::eof(I)) {
             $_ = \*I;
             push(@$rs, [ &$unpackc($_) ]);
         }
