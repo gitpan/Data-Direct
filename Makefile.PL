@@ -4,4 +4,5 @@ use ExtUtils::MakeMaker;
 WriteMakefile(
     'NAME'	=> 'Data::Direct',
     'VERSION_FROM' => 'Direct.pm', # finds $VERSION
+    'PREREQ_PM' => {'DBI' => '1.10'},
 );

@@ -1,10 +1,10 @@
 package Data::Direct;
 
-use strict;
+use strict qw(vars subs);
 use vars qw($VERSION @EXPORT @ISA $opt_u $opt_p $table $opt_w $opt_a
 	$gen_unique);
 
-$VERSION = 0.03;
+$VERSION = 0.04;
 
 require Exporter;
 @EXPORT = qw(edit);
@@ -422,9 +422,10 @@ sub gentemp {
 
 __END__
 # Documentation
+
 =head1 NAME
 
-Data::Direct - Perl module to emulate seqeuntial access to SQL tables
+Data::Direct - Perl module to emulate seqeuntial access to SQL tables.
 
 =head1 SYNOPSIS
  
