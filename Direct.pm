@@ -1,6 +1,10 @@
 package Data::Direct;
 
-$VERSION = 0.01;
+use strict;
+use vars qw($VERSION @EXPORT @ISA $opt_u $opt_p $table $opt_w $opt_a
+	$gen_unique);
+
+$VERSION = 0.02;
 
 require Exporter;
 @EXPORT = qw(edit);
@@ -14,25 +18,43 @@ sub new {
     bless $self, $class;
     $self->{' dsn'} = $dsn;
     my $dbh;
+
+####
+## Try to connect with transactions first; otherwise just connect
+
     eval '$dbh = DBI->connect($dsn, $user, $pass, {AutoCommit => 0});';
     $dbh = DBI->connect($dsn, $user, $pass) unless ($dbh);
     return undef unless ($dbh);
+
     $self->{' dbh'} = $dbh;
     my $sql = "SELECT * FROM $table" . ($filter ? " WHERE $filter" : "")
             . ($add ? " $add" : "");
     my $sth = $dbh->prepare($sql);
     return undef unless ($sth);
+
     $self->{' table'} = $table;
     $self->{' filter'} = $filter;
     $sth->execute();
+
+####
+## Find field names
+
     my $fields = $sth->{NAME};
     $self->{' fields'} = $fields;
-    my $r, @rs;
+
+####
+## Fetch rows
+
+    my ($r, @rs);
     while ($r = $sth->fetchrow_arrayref) {
+####
+## Recreate array ref. Could I use while (my $r = ?
+
         push(@rs, [@$r]);
     }
     $self->{' recs'} = \@rs;
     undef $sth;
+
     $self->fetch(0);
     $self->{' bookmarks'} = {};
     $self->{' zap'} = [];
@@ -49,6 +71,10 @@ sub bind {
 sub simplebind {
     my ($self, $pkg) = @_;
     my @fields = @{$self->{' fields'}};
+
+####
+## Create tuples 'var', \$var
+
     my @ary = map {($_, \${"${pkg}::$_"})} @fields;
     $self->bind(@ary);
 }
@@ -58,16 +84,32 @@ sub flush {
     my $param = shift;
     my ($table, $filter, $fields, $rs, $dbh) = 
         @$self{(' table', ' filter', ' fields', ' recs', ' dbh')};
+
+####
+## Delete records before inserting everything back
+## Can be hazardous if there are no transactions and
+## somebody added data meanwhile!
+
     my $sql = "DELETE FROM $table" . ($filter ? " WHERE $filter" : "");
-    $dbh->do($sql);
+    $dbh->do($sql) || die $DBI::errstr;
+
+####
+## Not sure why I wrote this:
+
     return if ($param eq 'pseudo');
+
+####
+## Prepare an INSERT statement
+
     $sql = "INSERT INTO $table (" . join(", ", @$fields) . ") VALUES ("
         . join(", ", map {"?";} @$fields) . ")";
-    my $sth = $dbh->prepare($sql);
+    my $sth = $dbh->prepare($sql) || die $DBI::errstr;
     my $i;
     foreach (@$rs) {
-        $sth->execute(@$_) unless ($self->{' zap'}->[$i++]);
+        ($sth->execute(@$_) || die $DBI::errstr)
+             unless ($self->{' zap'}->[$i++]);
     }
+    undef $sth;
     eval '$dbh->commit;' unless ($dbh->{AutoCommit});
     $dbh->disconnect;
 }
@@ -89,8 +131,16 @@ sub cursor {
 
 sub fetch {
     my $self = shift;
+
+####
+## Find cursor
+
     my $rs = $self->{' recs'};
     my $rec;
+
+####
+## Did we have a parameter?
+
     if (defined($_[0])) {
         $rec = shift;
         return undef if ($rec < 0 || $rec > @$rs);
@@ -99,13 +149,28 @@ sub fetch {
     } else {
         $rec = $self->{' cursor'};
     }
+
+####
+## Take row
+
     my $ref = $rs->[$rec];
     my @fields = @{$self->{' fields'}};
     my $bind = $self->{' binding'};
+
+####
+## Iterate over fields
+
     foreach (@$ref) {
         my $col = shift @fields;
+####
+## Bind variable
+
         my $ref = $bind->{$col};
         $$ref = $_ if (ref($ref));
+
+####
+## Load self
+
         $self->{$col} = $_;
     }
     1;
@@ -115,12 +180,18 @@ sub addnew {
     my $self = shift;
     my $rs = $self->{' recs'};
     my $fields = $self->{' fields'};
-    my @ary;
-    foreach (@$fields) {
-        $self->{$_} = undef;
-        push(@ary, undef)
-    }
-    push(@$rs, \@ary);
+    my $cursor = $self->{' cursor'};
+
+####
+## Create an empty record
+
+    my $new = [map {undef;} @$fields];
+
+####
+## Add it
+
+    splice(@$rs, $cursor, 0, $new);
+    $self->fetch($cursor);
 }
 
 sub setbookmark {
@@ -159,12 +230,23 @@ sub update {
     my $fields = $self->{' fields'};
     my @ary;
     my $bind = $self->{' binding'};
+####
+## Retrieve bound variables
+
     foreach (keys %$bind) {
         $self->{$_} = ${$bind->{$_}};
     }
+
+####
+## Retrieve row
+
     foreach (@$fields) {
         push(@ary, $self->{$_});
     }
+
+####
+## Put
+
     my $rs = $self->{' recs'};
     $rs->[$self->cursor] = \@ary;
 }
@@ -198,33 +280,82 @@ sub fields {
 sub spawn {
     require Text::ParseWords;
     my ($self, $cmd, $pack, $unpack) = @_;
+
+####
+## Find editor, unless a different command requested
+
     $cmd = $ENV{'EDITOR'} || 'vi' unless ($cmd);
+####
+## Default delimiter is comma
+
     $pack = "," unless ($pack);
-    my $packc = ref($pack) !~ /CODE/ ?
+
+####
+## If pack information is a string and not a routine, pack line by quoting
+## tokens and adding delmiters
+    my $packc = !UNIVERSAL::isa($pack, 'CODE') ?
             sub {join($pack, (map {qq!"$_"!} @_)) . "\n";} : $pack;
-    $unpackc = ref($pack) !~ /CODE/ ?
+
+####
+## Assume unpack routine to be supplied only if pack routine was supplied.
+## Otherwise, unpacking is done by parsing the delimited line
+
+## NOTE:
+## Packing function recieves a list; Unpacking function gets a stream to
+## read from.
+
+    my $unpackc = ref($pack) !~ /CODE/ ?
             sub { my $l = scalar(<$_>); chop $l;
               Text::ParseWords::parse_line($pack, undef, $l);} : $unpack;
+
+####
+## Save bookmark
+
     my $save = $self->cursor;
-    my $fn = join("-", "data_direct", $$, $0, time, localtime, rand, $gen_unique++);
-    $fn =~ s/[^a-zA-Z0-9]/_/g;
-    open(O, ">$fn");
+
+####
+## Create file
+
+    my $fn = &gentemp;
+    open(O, ">$fn") || die "Can't open $fn for write: $!";
     my $rs = $self->{' recs'};
+
+####
+## Iterate
+
     foreach (@$rs) {
         print O &$packc(@$_);
     }
     close(O);
+
+####
+## Take file stamp to figure if it was changed
+
     my @st = stat($fn);
-    splice(@st, 8);
+    splice(@st, 8); # Access time obviously changes
     my $s = join(":", @st);
-    system "$cmd $fn";
+
+####
+## Invoke editor
+    $cmd .= " %1" unless ($cmd =~ /[\$\%]1/);
+    $cmd =~ s/[\$\%]1/$fn/g;
+    system $cmd;
+
+####
+## Recreate file stamp
+
     @st = stat($fn);
     splice(@st, 8);
     my $ss = join(":", @st);
+
     my $ret = undef;
+
+####
+## If there were changes
+
     if ($s ne $ss) {
         @$rs = ();
-        open(I, $fn);
+        open(I, $fn) || die "Can't open $fn for read: $!";
         while (!eof(I)) {
             $_ = \*I;
             push(@$rs, [ &$unpackc($_) ]);
@@ -232,7 +363,7 @@ sub spawn {
         close(I);
         $ret = 1;
     }
-    unlink $fn;
+    unlink $fn || die "Can't remove $fn: $!";
     $ret;
 }
 
@@ -242,14 +373,44 @@ sub DESTROY {
 }
 
 sub edit {
+
+#####
+## Front end for spawn() to be called from command line
+
     require Getopt::Std;
     import Getopt::Std;
+
+####
+## Change slashes to dashes. Dashes would have been parsed by perl istelf.
+
     my @dummy = map {s|^/|-|;} @ARGV;
     getopt("u:p:w:a:");
-    my ($dsn, $table) = splice(@ARGV, 0, 2);
+
+    my ($dsn, $table) = @ARGV;
+
     my $d = new Data::Direct($dsn, $opt_u, $opt_p, $table, $opt_w,
          $opt_a) || die "Connection failed";
+
+####
+## Updated database only if changes were detected
+
     $d->flush if ($d->spawn);
+}
+
+sub gentemp {
+    my $fn;
+    eval {
+####
+## Make POSIX do the hard job
+
+        require POSIX;
+        $fn = &POSIX::tmpnam;
+    };
+    return $fn if ($fn);
+    $fn = join("-", "data_direct", $$, $0, time, localtime, rand, $gen_unique++);
+    $fn =~ s/[^a-zA-Z0-9]/_/g;
+    if (-e $fn) return &gentemp;
+    $fn;
 }
 
 1;
