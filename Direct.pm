@@ -4,7 +4,7 @@ use strict;
 use vars qw($VERSION @EXPORT @ISA $opt_u $opt_p $table $opt_w $opt_a
 	$gen_unique);
 
-$VERSION = 0.02;
+$VERSION = 0.03;
 
 require Exporter;
 @EXPORT = qw(edit);
@@ -407,9 +407,14 @@ sub gentemp {
         $fn = &POSIX::tmpnam;
     };
     return $fn if ($fn);
-    $fn = join("-", "data_direct", $$, $0, time, localtime, rand, $gen_unique++);
+    $fn = join("-", "data_direct", $$, $0, time, localtime, rand,
+         $gen_unique++); 
     $fn =~ s/[^a-zA-Z0-9]/_/g;
-    if (-e $fn) return &gentemp;
+####
+## Ultra safety check - run the function again if that weird filename
+## already exists.
+
+    return &gentemp if (-e $fn);
     $fn;
 }
 
